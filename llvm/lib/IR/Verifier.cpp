@@ -4970,7 +4970,7 @@ void Verifier::visitIntrinsicCall(Intrinsic::ID ID, CallBase &Call) {
   Check(IF->isDeclaration(), "Intrinsic functions should never be defined!",
         IF);
 
-  // We skip signature verify for masked intrinsic as the irformatter
+  // We skip signature verify for masked intrinsic as the sail-irformatter
   // accepts BOTH 3-arg and 4-arg forms and handles (3->4 )
   // upgrade in processMaskedIntrinsics().
   switch (ID) {

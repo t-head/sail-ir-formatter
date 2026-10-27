@@ -126,9 +126,9 @@ for caseName in caseSuite:
         print("Success!")
     with open(outFile, "r+") as f:
         content = f.read()
-        cmd = "; RUN: llvm-irformatter -S -verify-pointers < %s\n\n"
+        cmd = "; RUN: sail-irformatter -S -verify-pointers < %s\n\n"
         #clcontent = re.sub("\ndefine.*@(.*)\(", insert_callback, content)
-        #cmd = "; RUN: llvm-irformatter -S -verify-pointers < %s | FileCheck %s\n\n"
+        #cmd = "; RUN: sail-irformatter -S -verify-pointers < %s | FileCheck %s\n\n"
         i = 0
 
         for mct in re.split("; ModuleID = \'LLVMDialectModule\'", content):

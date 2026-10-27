@@ -348,7 +348,7 @@ def UseSampleProfile : StrBoolAttr<"use-sample-profile">;
 def DenormalFPMath : ComplexStrAttr<"denormal-fp-math", [FnAttr]>;
 def DenormalFPMathF32 : ComplexStrAttr<"denormal-fp-math-f32", [FnAttr]>;
 
-// For Attributes in higher llvm to ir-formatter
+// For Attributes in higher llvm to sail-ir-formatter
 def DeadOnUnwind : EnumAttr<"dead_on_unwind", [ParamAttr]>;
 def Writable : EnumAttr<"writable", [ParamAttr]>;
 def HggcNoYield : EnumAttr<"hggcnoyield", [FnAttr]>;

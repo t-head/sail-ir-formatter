@@ -23,7 +23,7 @@ else
   ENABLE_ASSERT=Off
 fi
 
-cd ${PPU_HOME}/llvm-ir-formatter
+cd ${PPU_HOME}/sail-ir-formatter
 mkdir -p build && cd build
 
 cross=""
@@ -47,15 +47,15 @@ ninja
 '
 
 clean_command '
-cd ${PPU_HOME}/llvm-ir-formatter
+cd ${PPU_HOME}/sail-ir-formatter
 rm -rf build
 '
 test_command '
-cd ${PPU_HOME}/llvm-ir-formatter/build
-./bin/llvm-lit ${PPU_HOME}/llvm-ir-formatter/llvm/test/tools/llvm-irformatter/
+cd ${PPU_HOME}/sail-ir-formatter/build
+./bin/llvm-lit ${PPU_HOME}/sail-ir-formatter/llvm/test/tools/sail-irformatter/
 '
 
 install_command '
 mkdir -p ${OUTPUT_DIR}/bin
-cp ${PPU_HOME}/llvm-ir-formatter/build/bin/llvm-irformatter ${OUTPUT_DIR}/bin
+cp ${PPU_HOME}/sail-ir-formatter/build/bin/sail-irformatter ${OUTPUT_DIR}/bin
 '

@@ -1,4 +1,4 @@
-# LLVM IR Formatter
+# Sail IR Formatter
 
 A command-line tool that converts opaque pointers to typed pointers and rewrites `memory(...)` attributes for compatibility with older LLVM toolchains.
 
@@ -12,26 +12,26 @@ Run from the repository root:
 ./build.sh
 ```
 
-The script builds all default targets in Release mode and runs the formatter tests. The executable is `build/bin/llvm-irformatter`; no separate LLVM installation is required.
+The script builds all default targets in Release mode and runs the formatter tests. The executable is `build/bin/sail-irformatter`; no separate LLVM installation is required.
 
 ## Usage
 
 Write converted textual IR:
 
 ```sh
-build/bin/llvm-irformatter -S input.ll -o output.ll
+build/bin/sail-irformatter -S input.ll -o output.ll
 ```
 
 Omit `-S` to write **bitcode**, regardless of the output extension:
 
 ```sh
-build/bin/llvm-irformatter input.ll -o output.bc
+build/bin/sail-irformatter input.ll -o output.bc
 ```
 
 Input supports textual IR and compatible bitcode. Input and output default to standard input and standard output; `-` selects either explicitly:
 
 ```sh
-build/bin/llvm-irformatter -S < input.ll > output.ll
+build/bin/sail-irformatter -S < input.ll > output.ll
 ```
 
 | Option | Default | Description |
@@ -52,7 +52,7 @@ Conversion may discard unsupported information; always validate the output with 
 `./build.sh` runs the formatter tests automatically. To rerun them after building:
 
 ```sh
-build/bin/llvm-lit -v llvm/test/tools/llvm-irformatter
+build/bin/llvm-lit -v llvm/test/tools/sail-irformatter
 ```
 
 Tests cover pointers, attributes, and syntax compatibility, including `llvm18_dev/` and `mlirTrans/`. The latter contains LLVM IR, not MLIR text.
@@ -61,9 +61,9 @@ Tests cover pointers, attributes, and syntax compatibility, including `llvm18_de
 
 | Path | Purpose |
 | --- | --- |
-| [`llvm/tools/llvm-irformatter/`](llvm/tools/llvm-irformatter/) | CLI and conversion pipeline |
+| [`llvm/tools/sail-irformatter/`](llvm/tools/sail-irformatter/) | CLI and conversion pipeline |
 | [`TypingPointers.cpp`](llvm/lib/Transforms/Utils/TypingPointers.cpp) | Pointer conversion and checks |
 | [`TransMemoryAttr.cpp`](llvm/lib/Transforms/Utils/TransMemoryAttr.cpp) | Memory-attribute conversion |
 | [`llvm/lib/AsmParser/`](llvm/lib/AsmParser/) | Parsing and syntax compatibility |
 | [`AutoUpgrade.cpp`](llvm/lib/IR/AutoUpgrade.cpp) | Intrinsic compatibility |
-| [`llvm/test/tools/llvm-irformatter/`](llvm/test/tools/llvm-irformatter/) | Regression tests |
+| [`llvm/test/tools/sail-irformatter/`](llvm/test/tools/sail-irformatter/) | Regression tests |
