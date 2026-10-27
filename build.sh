@@ -30,7 +30,7 @@ then
     -DLLVM_ENABLE_TERMINFO=OFF \
     ../llvm -DLLVM_ENABLE_PROJECTS="llvm" -DCMAKE_INSTALL_PREFIX="./output" \
     && ninja \
-    && ./bin/llvm-lit ${BASEDIR}/llvm/test/tools/llvm-irformatter/
+    && ./bin/llvm-lit ${BASEDIR}/llvm/test/tools/sail-irformatter/
 else
     cd $BUILD_DIR
     cmake -G Ninja -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
@@ -38,7 +38,7 @@ else
     -DLLVM_ENABLE_TERMINFO=OFF \
     ../llvm -DLLVM_ENABLE_PROJECTS="llvm" -DCMAKE_INSTALL_PREFIX="./output" \
     && ninja \
-    && ./bin/llvm-lit ${BASEDIR}/llvm/test/tools/llvm-irformatter/
+    && ./bin/llvm-lit ${BASEDIR}/llvm/test/tools/sail-irformatter/
 fi
 
 if [ $? -ne 0 ]

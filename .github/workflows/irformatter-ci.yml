@@ -1,4 +1,4 @@
-name: llvm-irformatter CI
+name: sail-irformatter CI
 
 on:
   pull_request:
@@ -35,7 +35,7 @@ env:
   # Defaults match tmake.build; workflow_dispatch can override them.
   BUILD_TYPE: ${{ github.event.inputs.build_type || 'Release' }}
   ENABLE_ASSERT: ${{ github.event.inputs.assertions || 'Off' }}
-  # Triton is rebuilt against the freshly built llvm-irformatter and tested on 890P.
+  # Triton is rebuilt against the freshly built sail-irformatter and tested on 890P.
   TRITON_REPO: t-head/triton-for-sail
   TRITON_REF: ${{ github.event.inputs.triton_ref || '3.7.0+v0.1.0' }}
   BOARD_TYPE: ZW-M890P
@@ -49,7 +49,7 @@ jobs:
       image: ghcr.io/actions/actions-runner:latest
     timeout-minutes: 360
     steps:
-      - name: Checkout llvm-ir-formatter
+      - name: Checkout sail-ir-formatter
         uses: actions/checkout@v4
 
       - name: Checkout triton-for-sail
@@ -90,7 +90,7 @@ jobs:
             source /usr/local/PPU_SDK/envsetup.sh
             ppu-smi || echo "[WARN] ppu-smi failed; PPU device not visible"
 
-            # ═════════ Stage 1: build llvm-irformatter (tmake.build flags) ═════════
+            # ═════════ Stage 1: build sail-irformatter (tmake.build flags) ═════════
             CMAKE_VER=$(cmake --version 2>/dev/null | head -1 | awk '{print $3}')
             if [ -z "$CMAKE_VER" ] || [ "$(printf '%s\n' 3.20 "$CMAKE_VER" | sort -V | head -1)" != "3.20" ]; then
               pip install "cmake>=3.20" || { echo "[FATAL] cannot install cmake"; exit 1; }
@@ -116,20 +116,20 @@ jobs:
                 ../llvm -DLLVM_ENABLE_PROJECTS="llvm" -DCMAKE_INSTALL_PREFIX="./output" \
               || { echo "[FATAL] cmake configure failed"; exit 1; }
             # Only the tool and what lit needs
-            ninja -j${JOBS} llvm-irformatter FileCheck not count llvm-config \
+            ninja -j${JOBS} sail-irformatter FileCheck not count llvm-config \
               || { echo "[FATAL] ninja build failed"; exit 1; }
             # Install (as tmake.build)
-            mkdir -p output/bin && cp bin/llvm-irformatter output/bin/
-            ./output/bin/llvm-irformatter --version || { echo "[FATAL] installed binary does not run"; exit 1; }
-            export TRITON_IR_FORMATTER_PATH=$SRC/build/output/bin/llvm-irformatter
-            cp "$TRITON_IR_FORMATTER_PATH" "$NAS_DIR/" || echo "[WARN] failed to copy llvm-irformatter to NAS"
+            mkdir -p output/bin && cp bin/sail-irformatter output/bin/
+            ./output/bin/sail-irformatter --version || { echo "[FATAL] installed binary does not run"; exit 1; }
+            export TRITON_IR_FORMATTER_PATH=$SRC/build/output/bin/sail-irformatter
+            cp "$TRITON_IR_FORMATTER_PATH" "$NAS_DIR/" || echo "[WARN] failed to copy sail-irformatter to NAS"
 
-            # ═════════ Stage 2: llvm-irformatter UT (lit) ═════════
+            # ═════════ Stage 2: sail-irformatter UT (lit) ═════════
             ./bin/llvm-lit -v --xunit-xml-output lit_result.xml \
-                $SRC/llvm/test/tools/llvm-irformatter/ || UT_RC=$?
+                $SRC/llvm/test/tools/sail-irformatter/ || UT_RC=$?
             UT_RC=${UT_RC:-0}
             cp lit_result.xml "$NAS_DIR/" || echo "[WARN] failed to copy lit_result.xml to NAS"
-            echo "[INFO] llvm-irformatter UT exit code: ${UT_RC}"
+            echo "[INFO] sail-irformatter UT exit code: ${UT_RC}"
 
             # ═════════ Stage 3: rebuild Triton with this formatter and run its tests ═════════
             cd $TRITON_SRC
@@ -174,7 +174,7 @@ jobs:
             python -c "import triton, sys; f=getattr(triton,'__file__',''); print('[INFO] triton.__file__ =', f); print('[INFO] triton.__version__ =', getattr(triton,'__version__','?')); sys.exit(0 if '$TRITON_SRC' in f else 1)" \
               || { echo "[FATAL] imported triton is NOT the source-built one"; exit 1; }
             # Guarantee the PPU backend resolves to the freshly built formatter, not $PPU_SDK/bin
-            python - << 'PYEOF' || { echo "[FATAL] triton does not use the freshly built llvm-irformatter"; exit 1; }
+            python - << 'PYEOF' || { echo "[FATAL] triton does not use the freshly built sail-irformatter"; exit 1; }
             import os, sys
             from triton.backends.ppu.compiler import get_irformatter
             got = os.path.realpath(get_irformatter())
@@ -192,7 +192,7 @@ jobs:
             [ "$UT_RC" -eq 0 ] && [ "$TRITON_RC" -eq 0 ]
           cleanup_policy: always
 
-      - name: llvm-irformatter UT summary
+      - name: sail-irformatter UT summary
         if: ${{ !cancelled() }}
         shell: bash
         env:
@@ -206,7 +206,7 @@ jobs:
           import xml.etree.ElementTree as ET
 
           env = os.environ
-          print("## llvm-irformatter UT")
+          print("## sail-irformatter UT")
           print()
           print("| Item | Value |")
           print("| --- | --- |")
@@ -259,7 +259,7 @@ jobs:
           python3 triton-for-sail/.github/ppu-ci/report_test_results.py \
             --xml "$NAS_RESULT_DIR/test_result.xml" \
             --env-info "$NAS_RESULT_DIR/env_info.json" \
-            --title "Triton PPU Test Results (${TRITON_REF} + new llvm-irformatter, ${BOARD_TYPE})" \
+            --title "Triton PPU Test Results (${TRITON_REF} + new sail-irformatter, ${BOARD_TYPE})" \
             --docker-image "${CI_IMAGE}" \
             --run-number "${{ github.run_number }}" \
             --branch "${TRITON_REF}" \
@@ -268,11 +268,11 @@ jobs:
             --pods "${{ steps.build.outputs.task_pods }}" \
             >> "$GITHUB_STEP_SUMMARY" || echo "::warning::Triton report generation failed with exit code $?"
 
-      - name: Upload llvm-irformatter
+      - name: Upload sail-irformatter
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: llvm-irformatter-${{ github.sha }}
-          path: /wl_nas/devops/irformatter-ci/${{ github.run_id }}/${{ github.run_attempt }}/llvm-irformatter
+          name: sail-irformatter-${{ github.sha }}
+          path: /wl_nas/devops/irformatter-ci/${{ github.run_id }}/${{ github.run_attempt }}/sail-irformatter
           retention-days: 14
           if-no-files-found: warn
