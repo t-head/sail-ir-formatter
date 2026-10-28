@@ -1123,6 +1123,7 @@ void PointersAnalyzer::visitLoadInst(LoadInst &I) {
     }
     LoadInst *NewLoad = B.CreateLoad(ValTy, NewOpnd, I.isVolatile());
 
+    NewLoad->copyMetadata(I, {LLVMContext::MD_range});
     NewLoad->setAlignment(I.getAlign());
     NewLoad->setAtomic(I.getOrdering(), I.getSyncScopeID());
 
@@ -1344,6 +1345,7 @@ void PointersAnalyzer::visitCallInst(CallInst &I) {
             Dialect
         );
         llvm::CallInst *NewCall = llvm::CallInst::Create(NewIA, ArgVec, "", CI);
+        NewCall->copyMetadata(*CI, {LLVMContext::MD_range});
         Value* TransTemp;
         if(CI->getType()->isAggregateType()) {
           TransTemp = B.CreateIntrinsic(Intrinsic::fake_cast,
@@ -1383,7 +1385,7 @@ void PointersAnalyzer::visitCallInst(CallInst &I) {
             AsmStr, Constraints, /*hasSideEffects=*/false);
         llvm::CallInst *NewCall = llvm::CallInst::Create(
             IA, {Arg}, "", CI);
-        NewCall->copyMetadata(*CI, {llvm::LLVMContext::MD_dbg});
+        NewCall->copyMetadata(*CI, {LLVMContext::MD_dbg, LLVMContext::MD_range});
         if (CI->isTailCall()) {
           NewCall->setTailCall(true);
         }
@@ -1418,13 +1420,14 @@ void PointersAnalyzer::visitCallInst(CallInst &I) {
           NewCallVal = B.CreatePointerCast(CallVal, NewFPtrTy);
         }
         CallInst* NewCall = B.CreateCall(NewFTy, NewCallVal, NewArgs);
-        NewCall->copyMetadata(*CI, {llvm::LLVMContext::MD_dbg});
+        NewCall->copyMetadata(*CI, {LLVMContext::MD_dbg, LLVMContext::MD_range});
         if (CI->isTailCall()) {
           NewCall->setTailCall(true);
         }
         NewCall->setCallingConv(CI->getCallingConv());
         NewCall->setAttributes(CI->getAttributes());
-        NewCall->copyMetadata(*CI, {LLVMContext::MD_prof, LLVMContext::MD_dbg});
+        NewCall->copyMetadata(*CI, {LLVMContext::MD_prof, LLVMContext::MD_dbg,
+                                    LLVMContext::MD_range});
         Value* CastInst = B.CreateBitCast(NewCall, RetTy);
         CI->replaceAllUsesWith(CastInst);
         CI->eraseFromParent();
@@ -1857,6 +1860,7 @@ bool PointersAnalyzer::processFunctionArguments(Function *&F) {
                      llvm::dbgs() << "\n"; );
 
           CallInst *NewCI = B.CreateCall(NewFn, GEP);
+          NewCI->copyMetadata(*CI, {LLVMContext::MD_range});
           CI->replaceAllUsesWith(NewCI);
           CI->eraseFromParent();
         } else {
@@ -1920,7 +1924,8 @@ bool PointersAnalyzer::processFunctionArguments(Function *&F) {
             }
             NewCI->setCallingConv(CI->getCallingConv());
             NewCI->setAttributes(CI->getAttributes());
-            NewCI->copyMetadata(*CI, {LLVMContext::MD_prof, LLVMContext::MD_dbg});
+            NewCI->copyMetadata(*CI, {LLVMContext::MD_prof, LLVMContext::MD_dbg,
+                                        LLVMContext::MD_range});
 
             if(RetChange) {
               Value* TransTemp;

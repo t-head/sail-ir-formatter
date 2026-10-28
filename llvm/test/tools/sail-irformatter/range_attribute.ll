@@ -24,7 +24,7 @@ define void @kernel(ptr addrspace(1) %0, ptr addrspace(1) %1) local_unnamed_addr
   %17 = insertelement <4 x i8> %15, i8 %16, i64 0, !dbg !17
   %18 = icmp ne <4 x i8> %17, zeroinitializer, !dbg !17
   %19 = bitcast <4 x i1> %18 to i4, !dbg !18
-  ; CHECK: %{{.+}} = call i4 @llvm.ctpop.i4(i4 %{{.+}}), !dbg !18
+  ; CHECK: %{{.+}} = call i4 @llvm.ctpop.i4(i4 %{{.+}}), !dbg !{{[0-9]+}}, !range ![[RANGE:[0-9]+]]
   %20 = tail call range(i4 0, 5) i4 @llvm.ctpop.i4(i4 %19), !dbg !18
   %.mask = and i4 %20, 1, !dbg !21
   %21 = zext nneg i4 %.mask to i32, !dbg !21
@@ -97,3 +97,5 @@ attributes #4 = { nounwind }
 !22 = !DILocation(line: 2167, column: 24, scope: !7)
 !23 = !DILocation(line: 2170, column: 20, scope: !7)
 !24 = !DILocation(line: 2170, column: 4, scope: !7)
+
+; CHECK: ![[RANGE]] = !{i4 0, i4 5}

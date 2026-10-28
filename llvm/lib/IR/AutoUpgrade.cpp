@@ -1253,6 +1253,9 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
 }
 
 bool llvm::UpgradeIntrinsicFunction(Function *F, Function *&NewFn) {
+  Attribute Range =
+      F->getAttributes().getRetAttrs().getAttribute("llvm-irformatter.range");
+  Type *ReturnTy = F->getReturnType();
   NewFn = nullptr;
   bool Upgraded = UpgradeIntrinsicFunction1(F, NewFn);
   assert(F != NewFn && "Intrinsic function upgraded to the same function");
@@ -1260,8 +1263,12 @@ bool llvm::UpgradeIntrinsicFunction(Function *F, Function *&NewFn) {
   // Upgrade intrinsic attributes.  This does not change the function.
   if (NewFn)
     F = NewFn;
-  if (Intrinsic::ID id = F->getIntrinsicID())
+  if (Intrinsic::ID id = F->getIntrinsicID()) {
     F->setAttributes(Intrinsic::getAttributes(F->getContext(), id));
+    // Intrinsic table attributes do not include the parsed compatibility range.
+    if (Range.isValid() && F->getReturnType() == ReturnTy)
+      F->addRetAttr(Range);
+  }
   return Upgraded;
 }
 
@@ -4483,6 +4490,13 @@ void llvm::UpgradeIntrinsicCall(CallBase *CI, Function *NewFn) {
   }
   assert(NewCall && "Should have either set this variable or returned through "
                     "the default case");
+  if (NewCall->getType() == CI->getType()) {
+    NewCall->copyMetadata(*CI, {LLVMContext::MD_range});
+    Attribute Range =
+        CI->getAttributes().getRetAttrs().getAttribute("llvm-irformatter.range");
+    if (Range.isValid())
+      NewCall->addRetAttr(Range);
+  }
   NewCall->takeName(CI);
   CI->replaceAllUsesWith(NewCall);
   CI->eraseFromParent();
