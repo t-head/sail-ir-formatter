@@ -183,6 +183,8 @@ jobs:
             sys.exit(0 if got == want else 1)
             PYEOF
             pip install -r python/test-requirements.txt pandas
+            # Pin test deps to the verified combination for triton-for-sail 3.7
+            pip install autopep8==2.3.2 isort==9.0.2 numpy==1.26.0 einops==0.8.2 pytest==9.1.1 pytest-forked==1.7.5 pytest-timeout==2.4.0 pytest-xdist==3.8.0 scipy==1.11.3 llnl-hatchet==2026.2.0 pandas==2.3.3 expecttest==0.2.1 msgpack==1.2.3
             python .github/ppu-ci/run_checkin_tests.py -o test_result.xml --test-dir $TRITON_SRC --env-output env_info.json || TRITON_RC=$?
             TRITON_RC=${TRITON_RC:-0}
             cp test_result.xml env_info.json "$NAS_DIR/triton/" || echo "[WARN] failed to copy triton results to NAS"
