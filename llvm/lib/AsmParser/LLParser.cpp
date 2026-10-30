@@ -16,6 +16,7 @@
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/AsmParser/LLToken.h"
 #include "llvm/AsmParser/SlotMapping.h"
 #include "llvm/BinaryFormat/Dwarf.h"
@@ -2917,13 +2918,21 @@ bool LLParser::parseRangeAttr(AttrBuilder &B) {
   if (ParseAPSInt(BitWidth, Lower) ||
       parseToken(lltok::comma, "expected ','") || ParseAPSInt(BitWidth, Upper))
     return true;
-  if (Lower == Upper)
-    return tokError("the range should not represent the full or empty set!");
+  if (Lower == Upper && !Lower.isZero())
+    return tokError("equal range limits must both be zero");
 
   if (parseToken(lltok::rparen, "expected ')'"))
     return true;
 
-  //B.addRangeAttr(ConstantRange(Lower, Upper));
+  // Carry the newer attribute through this older IR representation. The
+  // formatter lowers supported return ranges to metadata before rewriting IR.
+  SmallString<64> Range;
+  raw_svector_ostream OS(Range);
+  OS << BitWidth << ':';
+  Lower.print(OS, /*isSigned=*/false);
+  OS << ':';
+  Upper.print(OS, /*isSigned=*/false);
+  B.addAttribute("llvm-irformatter.range", Range);
   return false;
 }
 
