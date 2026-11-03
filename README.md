@@ -1,5 +1,7 @@
 # Sail IR Formatter
 
+English | [简体中文](README.zh-CN.md)
+
 A command-line tool that converts opaque pointers to typed pointers and rewrites `memory(...)` attributes for compatibility with older LLVM toolchains.
 
 For example, [triton-for-sail](https://github.com/t-head/triton-for-sail/blob/235464c50eb706e09b981198c1117b5a5e6c91b2/third_party/ppu/backend/compiler.py#L471) uses it to prepare LLVM IR for PPU code generation.
