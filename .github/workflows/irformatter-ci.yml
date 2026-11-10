@@ -61,7 +61,7 @@ jobs:
 
       - name: Build irformatter, run UT, rebuild and test Triton on 890P
         id: build
-        uses: t-head/ppu-scheduler-action@main
+        uses: t-head/ci-infra/cluster-run@main
         with:
           image: ${{ env.CI_IMAGE }}
           nnodes: 0
