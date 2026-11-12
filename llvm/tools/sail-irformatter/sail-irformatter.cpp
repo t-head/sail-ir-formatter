@@ -38,6 +38,7 @@
 #include "llvm/Transforms/IPO/StripSymbols.h"
 #include "llvm/Transforms/Utils/TypingPointers.h"
 #include "llvm/Transforms/Utils/TransMemoryAttr.h"
+#include "llvm/Transforms/Utils/RangeAttrsToMetadata.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include <memory>
 #include <utility>
@@ -120,6 +121,9 @@ int main(int argc, char **argv) {
     errs() << EC.message() << '\n';
     return 1;
   }
+  // Materialize declaration ranges while the original callees are identifiable.
+  PM.addPass(RangeAttrsToMetadataPass());
+
   if(TypingPtrs)
     PM.addPass(TypingPointers());
 

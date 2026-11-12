@@ -116,7 +116,7 @@ jobs:
                 ../llvm -DLLVM_ENABLE_PROJECTS="llvm" -DCMAKE_INSTALL_PREFIX="./output" \
               || { echo "[FATAL] cmake configure failed"; exit 1; }
             # Only the tool and what lit needs
-            ninja -j${JOBS} sail-irformatter FileCheck not count llvm-config \
+            ninja -j${JOBS} sail-irformatter FileCheck opt split-file not count llvm-config \
               || { echo "[FATAL] ninja build failed"; exit 1; }
             # Install (as tmake.build)
             mkdir -p output/bin && cp bin/sail-irformatter output/bin/
