@@ -136,6 +136,8 @@ public:
   Constant* processConstantAggregate(ConstantAggregate *CA);
 
   Constant* processConstant(Constant* CVal);
+  void processOperandBundles(IRBuilder<> &Builder, CallBase &Call,
+                             SmallVectorImpl<OperandBundleDef> &Bundles);
 
   GlobalVariable* processGlobalVariable(GlobalVariable* GV);
 
@@ -685,15 +687,11 @@ void PointersAnalyzer::processConstantExpression(ConstantExpr *CE,
     Constant *NewPTI = ConstantExpr::getPtrToInt(dyn_cast<Constant>(NewOpnd), PTI->getType());
     ConstantExpMap[CE] = NewPTI;
   } else if (CE->getOpcode() == Instruction::IntToPtr) {
-    auto *ITP = dyn_cast<IntToPtrInst>(CE->getAsInstruction());
-    // visitIntToPtrInst(*ITP);
-    IRBuilder<> B(CE->getContext());
-    Type *PtrType = ITP->getDestTy();
+    Type *PtrType = CE->getType();
     Type *NewPtrType = processType(PtrType);
     Constant *NewITP = CE;
     if (PtrType != NewPtrType)
-      NewITP = ConstantExpr::getIntToPtr(dyn_cast<Constant>(ITP->getOperand(0)),
-                                         NewPtrType);
+      NewITP = ConstantExpr::getIntToPtr(CE->getOperand(0), NewPtrType);
     ConstantExpMap[CE] = NewITP;
   } else {
     ConstantExpMap[CE] = CE;
@@ -737,8 +735,20 @@ Constant* PointersAnalyzer::processConstant(Constant* CVal) {
   IRBuilder<> B(Ctx);
 
   if(auto *CAY = dyn_cast<ConstantArray>(CVal)) {
+    if (!isContainOpaquePointers(CAY->getType()))
+      return CAY;
     processArray(CAY);
     return dyn_cast<Constant>(AggregateMap[CAY]);
+  } else if (auto *CV = dyn_cast<ConstantVector>(CVal)) {
+    auto *NewTy = cast<VectorType>(processType(CV->getType()));
+    SmallVector<Constant *, 8> Elements;
+    for (const Use &Input : CV->operands()) {
+      Constant *Element = processConstant(cast<Constant>(Input.get()));
+      if (Element->getType() != NewTy->getElementType())
+        Element = ConstantExpr::getBitCast(Element, NewTy->getElementType());
+      Elements.push_back(Element);
+    }
+    return ConstantVector::get(Elements);
   } else if (auto *CST = dyn_cast<ConstantStruct>(CVal)) {
     processStructure(CST);
     return dyn_cast<Constant>(AggregateMap[CST]);
@@ -1757,6 +1767,26 @@ Type* PointersAnalyzer::processType(Type* Ty) {
   }
 }
 
+void PointersAnalyzer::processOperandBundles(
+    IRBuilder<> &Builder, CallBase &Call,
+    SmallVectorImpl<OperandBundleDef> &Bundles) {
+  for (unsigned Idx = 0; Idx < Call.getNumOperandBundles(); ++Idx) {
+    OperandBundleUse Bundle = Call.getOperandBundleAt(Idx);
+    SmallVector<Value *, 4> Inputs;
+    for (const Use &Input : Bundle.Inputs) {
+      if (Bundle.getTagID() == LLVMContext::OB_clang_arc_attachedcall) {
+        // Attached calls require a Function, not a cast to a data pointer.
+        if (auto *Fn = dyn_cast<Function>(Input.get()->stripPointerCasts())) {
+          Inputs.push_back(processConstant(Fn));
+          continue;
+        }
+      }
+      Inputs.push_back(processOpaqueOperand(Builder, Input.get()));
+    }
+    Bundles.emplace_back(Bundle.getTagName().str(), Inputs);
+  }
+}
+
 bool PointersAnalyzer::processFunctionArguments(Function *&F) {
   IRBuilder<> B(F->getContext());
   FunctionType *FuncTy = F->getFunctionType();
@@ -1903,7 +1933,11 @@ bool PointersAnalyzer::processFunctionArguments(Function *&F) {
           );
 
           SmallVector<OperandBundleDef, 1> OpBundles;
-          CI->getOperandBundlesAsDefs(OpBundles);
+          if (RebuildCall) {
+            processOperandBundles(B, *CI, OpBundles);
+          } else {
+            CI->getOperandBundlesAsDefs(OpBundles);
+          }
 
           if(RebuildCall) {
             // used as called function
@@ -1913,14 +1947,19 @@ bool PointersAnalyzer::processFunctionArguments(Function *&F) {
                                         ArgList, OpBundles, "", CI);
             } else if (CallInst *CIT = dyn_cast<CallInst>(CI)) {
               NewCI = CallInst::Create(NewFn, ArgList, OpBundles, "", CI);
-              cast<CallInst>(NewCI)->setTailCallKind(
-                  cast<CallInst>(NewCI)->getTailCallKind());
+              if (CIT->getNumOperandBundles() != 0 ||
+                  CIT->getIntrinsicID() == Intrinsic::assume)
+                cast<CallInst>(NewCI)->setTailCallKind(CIT->getTailCallKind());
             } else {
               report_fatal_error("unhandled call base");
             }
             NewCI->setCallingConv(CI->getCallingConv());
             NewCI->setAttributes(CI->getAttributes());
-            NewCI->copyMetadata(*CI, {LLVMContext::MD_prof, LLVMContext::MD_dbg});
+            if (CI->getNumOperandBundles() != 0 ||
+                CI->getIntrinsicID() == Intrinsic::assume)
+              NewCI->copyMetadata(*CI);
+            else
+              NewCI->copyMetadata(*CI, {LLVMContext::MD_prof, LLVMContext::MD_dbg});
 
             if(RetChange) {
               Value* TransTemp;
@@ -2178,120 +2217,126 @@ void PointersAnalyzer::processFunctions(Module& M) {
   }
 }
 
+static AttributeList maskedAttributes(LLVMContext &Ctx, AttributeList Old,
+                                      unsigned OldCount, unsigned AlignIdx) {
+  if (OldCount == 4)
+    return Old;
+  SmallVector<AttributeSet, 4> Params;
+  for (unsigned I = 0; I < 4; ++I) {
+    if (I == AlignIdx)
+      Params.push_back(AttributeSet());
+    else {
+      AttributeSet Attributes = Old.getParamAttrs(I - (I > AlignIdx));
+      // The parser may attach the four-argument immarg property to the old mask.
+      if (I == AlignIdx + 1)
+        Attributes = Attributes.removeAttribute(Ctx, Attribute::ImmArg);
+      Params.push_back(Attributes);
+    }
+  }
+  return AttributeList::get(Ctx, Old.getFnAttrs(), Old.getRetAttrs(), Params);
+}
+
 bool PointersAnalyzer::processMaskedIntrinsics(Module &M) {
   SmallVector<Function *, 8> DeclsToUpgrade;
-  for (Function &F : M) {
-    if (!F.isDeclaration()) continue;
-    unsigned IID = F.getIntrinsicID();
-    if (!isMaskedIntrinsic(F.getIntrinsicID())) continue;
-    if (F.arg_size() != 3) continue;
-    DeclsToUpgrade.push_back(&F);
-  }
-  if (DeclsToUpgrade.empty())
-    return Changed;
+  for (Function &F : M)
+    if (F.isDeclaration() && isMaskedIntrinsic(F.getIntrinsicID()))
+      DeclsToUpgrade.push_back(&F);
 
   for (Function *OldFn : DeclsToUpgrade) {
-    Intrinsic::ID IID = OldFn->getIntrinsicID();
-    bool IsLoadGather = (IID == Intrinsic::masked_load ||
-                         IID == Intrinsic::masked_gather);
-    unsigned PtrIdx = IsLoadGather ? 0 : 1;
-    Type *RetTy = OldFn->getReturnType();
-    Type *PtrTy = PointerType::get(M.getContext(), 0);
+    const unsigned OldCount = OldFn->arg_size();
+    if (OldCount != 3 && OldCount != 4)
+      report_fatal_error("unsupported masked intrinsic signature");
+    const Intrinsic::ID IID = OldFn->getIntrinsicID();
+    const bool IsLoad = IID == Intrinsic::masked_load ||
+                        IID == Intrinsic::masked_gather;
+    const bool IsGather = IID == Intrinsic::masked_gather ||
+                          IID == Intrinsic::masked_scatter;
+    const unsigned PtrIdx = IsLoad ? 0 : 1;
+    const unsigned AlignIdx = PtrIdx + 1;
+    Type *ValueTy = processType(IsLoad ? OldFn->getReturnType()
+                                      : OldFn->getArg(0)->getType());
+    Type *OldPtrTy = OldFn->getArg(PtrIdx)->getType();
+    const unsigned AddressSpace = OldPtrTy->getScalarType()->getPointerAddressSpace();
+    Type *PtrTy = PointerType::get(
+        IsGather ? cast<VectorType>(ValueTy)->getElementType() : ValueTy,
+        AddressSpace, /*ReserveType=*/true);
+    if (IsGather)
+      PtrTy = VectorType::get(PtrTy, cast<VectorType>(OldPtrTy)->getElementCount());
 
-    // Build 4-arg function type
-    SmallVector<Type *, 4> NewParams;
-    if (IsLoadGather) {
-      // (ptr, i32, mask, passthru)
-      NewParams.push_back(PtrTy);
-      NewParams.push_back(Type::getInt32Ty(M.getContext()));
-      NewParams.push_back(OldFn->getArg(1)->getType());
-      NewParams.push_back(OldFn->getArg(2)->getType());
-    } else {
-      // (val, ptr, i32, mask)
-      NewParams.push_back(OldFn->getArg(0)->getType());
-      NewParams.push_back(PtrTy);
-      NewParams.push_back(Type::getInt32Ty(M.getContext()));
-      NewParams.push_back(OldFn->getArg(2)->getType());
+    SmallVector<Type *, 4> Params;
+    for (unsigned I = 0; I < OldCount; ++I) {
+      if (OldCount == 3 && I == AlignIdx)
+        Params.push_back(Type::getInt32Ty(M.getContext()));
+      Params.push_back(I == PtrIdx ? PtrTy
+                                   : processType(OldFn->getArg(I)->getType()));
     }
-
     FunctionType *NewFTy =
-        FunctionType::get(RetTy, NewParams, /*isVarArg=*/false);
+        FunctionType::get(processType(OldFn->getReturnType()), Params, false);
+    std::string Name = Intrinsic::getName(IID, {ValueTy, PtrTy}, &M, NewFTy);
+    OldFn->setName(OldFn->getName() + ".old");
+    Function *NewFn = M.getFunction(Name);
+    if (NewFn && NewFn->getFunctionType() != NewFTy)
+      report_fatal_error("incompatible masked intrinsic declaration");
+    if (!NewFn)
+      NewFn = Function::Create(NewFTy, OldFn->getLinkage(),
+                               OldFn->getAddressSpace(), /*ReserveType=*/true,
+                               Name, &M);
+    NewFn->setAttributes(maskedAttributes(M.getContext(), OldFn->getAttributes(),
+                                         OldCount, AlignIdx)
+                             .addParamAttribute(M.getContext(), AlignIdx,
+                                                Attribute::ImmArg));
 
-    // Rename old and create new declaration
-    std::string OrigName = std::string(OldFn->getName());
-    OldFn->setName(OrigName + ".old");
-    Function *NewFn = Function::Create(NewFTy, OldFn->getLinkage(),
-                                       OldFn->getAddressSpace(),
-                                       OrigName, &M);
-    NewFn->copyAttributesFrom(OldFn);
-
-    // Replace all uses
     while (!OldFn->use_empty()) {
-      User *Usr = *OldFn->user_begin();
-      CallBase *CB = dyn_cast<CallBase>(Usr);
-      if (CB && CB->getCalledFunction() == OldFn) {
-        // Compute alignment from param attribute or data layout
-        Value *PtrOp = CB->getArgOperand(PtrIdx);
-        unsigned AlignVal = 1;
-        if (Argument *A = dyn_cast<Argument>(PtrOp)) {
-          if (A->hasAttribute(Attribute::Alignment)) {
-            MaybeAlign MA = A->getAttribute(Attribute::Alignment).getAlignment();
-            if (MA) AlignVal = MA->value();
-          }
-        }
-        if (AlignVal == 1) {
-          Attribute AlignAttr = CB->getParamAttr(PtrIdx, Attribute::Alignment);
-          if (AlignAttr.isValid()) {
-            MaybeAlign MA = AlignAttr.getAlignment();
-            if (MA && MA->value() != 0) AlignVal = MA->value();
-          }
-        }
-        if (AlignVal == 1) {
-          Type *ValTy = IsLoadGather ? RetTy : OldFn->getArg(0)->getType();
-          unsigned EltSize =
-              ValTy->getScalarType()->getPrimitiveSizeInBits() / 8;
-          Align DefaultAlign(EltSize ? EltSize : 4);
-          Align PtrAlign = PtrOp->getPointerAlignment(M.getDataLayout());
-          AlignVal = std::max(DefaultAlign, PtrAlign).value();
-        }
-
-        Value *AlignOp =
-            ConstantInt::get(Type::getInt32Ty(M.getContext()), AlignVal);
-
-        SmallVector<Value *, 4> NewArgs;
-        if (IsLoadGather) {
-          NewArgs.push_back(CB->getArgOperand(0)); // ptr
-          NewArgs.push_back(AlignOp);
-          NewArgs.push_back(CB->getArgOperand(1)); // mask
-          NewArgs.push_back(CB->getArgOperand(2)); // passthru
-        } else {
-          NewArgs.push_back(CB->getArgOperand(0)); // val
-          NewArgs.push_back(CB->getArgOperand(1)); // ptr
-          NewArgs.push_back(AlignOp);
-          NewArgs.push_back(CB->getArgOperand(2)); // mask
-        }
-
-        CallInst *NewCall = CallInst::Create(NewFTy, NewFn, NewArgs, "", CB);
-        NewCall->setCallingConv(CB->getCallingConv());
-        NewCall->setDebugLoc(CB->getDebugLoc());
-        NewCall->copyMetadata(*CB);
-        if (auto *OldCI = dyn_cast<CallInst>(CB))
-          NewCall->setTailCallKind(OldCI->getTailCallKind());
-
-        if (IsLoadGather)
-          CB->replaceAllUsesWith(NewCall);
-        CB->eraseFromParent();
-      } else {
-        CB
-            ? CB->replaceUsesOfWith(OldFn, ConstantExpr::getBitCast(NewFn, OldFn->getType()))
-            : Usr->replaceUsesOfWith(OldFn, ConstantExpr::getBitCast(NewFn, OldFn->getType()));
+      auto *Call = dyn_cast<CallInst>(*OldFn->user_begin());
+      if (!Call || Call->getCalledFunction() != OldFn)
+        report_fatal_error("masked intrinsic must have direct call users");
+      IRBuilder<> Builder(Call);
+      Value *Pointer = Call->getArgOperand(PtrIdx);
+      Value *Typed = processOpaqueOperand(Builder, Pointer, PtrTy);
+      if (Typed->getType() != PtrTy)
+        Typed = createCast(Builder, Typed, PtrTy);
+      Value *Alignment = nullptr;
+      if (OldCount == 3) {
+        // A missing attribute proves only byte alignment, not element alignment.
+        MaybeAlign Known = Call->getParamAlign(PtrIdx);
+        if (!Known)
+          Known = OldFn->getParamAlign(PtrIdx);
+        Alignment = ConstantInt::get(Type::getInt32Ty(M.getContext()),
+                                     Known ? Known->value() : 1);
       }
+      SmallVector<Value *, 4> Args;
+      for (unsigned I = 0; I < OldCount; ++I) {
+        if (OldCount == 3 && I == AlignIdx)
+          Args.push_back(Alignment);
+        Value *Arg = Call->getArgOperand(I);
+        if (I == PtrIdx)
+          Arg = Typed;
+        else
+          Arg = processOpaqueOperand(
+              Builder, Arg, processType(OldFn->getArg(I)->getType()));
+        Args.push_back(Arg);
+      }
+      // Preserve bundle order and type pointer and aggregate inputs.
+      SmallVector<OperandBundleDef, 2> Bundles;
+      processOperandBundles(Builder, *Call, Bundles);
+      CallInst *NewCall = CallInst::Create(NewFTy, NewFn, Args, Bundles, "", Call);
+      NewCall->setAttributes(maskedAttributes(M.getContext(), Call->getAttributes(),
+                                             OldCount, AlignIdx));
+      NewCall->setCallingConv(Call->getCallingConv());
+      NewCall->setTailCallKind(Call->getTailCallKind());
+      NewCall->copyIRFlags(Call);
+      NewCall->copyMetadata(*Call);
+      if (IsLoad) {
+        Value *Result = NewCall;
+        if (NewCall->getType() != Call->getType())
+          Result = createCast(Builder, NewCall, Call->getType());
+        Call->replaceAllUsesWith(Result);
+      }
+      Call->eraseFromParent();
     }
-    OldFn->removeDeadConstantUsers();
     OldFn->eraseFromParent();
     Changed = true;
   }
-
   return Changed;
 }
 
@@ -2321,9 +2366,6 @@ void VerifyAnalyzer::visitFunction(Function &F) {
   unsigned IID = F.getIntrinsicID();
   for (auto *EltTy : FuncTy->params()) {
     if (isContainOpaquePointers(EltTy)) {
-      // Allow opaque pointer types in masked intrinsics
-      if (isMaskedIntrinsic(IID) && (EltTy->isPointerTy() || EltTy->isVectorTy()))
-        continue;
       F.print(llvm::errs());
       llvm::errs() << "\n";
       report_fatal_error("Function contain opaque pointer need to be handled");
@@ -2371,22 +2413,6 @@ void VerifyAnalyzer::visitInstruction(Instruction &I) {
       // GlobalAlias always get ptr type
       if (isa<GlobalAlias>(opnd))
         continue;
-      // For masked intrinsics, pointer arguments are opaque ptr (or vector of ptr)
-      // which is expected and should not trigger error
-      if (CallBase *CB = dyn_cast<CallBase>(&I)) {
-        if (Function *F = CB->getCalledFunction()) {
-          unsigned IID = F->getIntrinsicID();
-          if (isMaskedIntrinsic(IID)) {
-            // Check if this operand is a pointer type or vector of pointer type
-            Type *OpTy = opnd->getType();
-            if ((OpTy->isPointerTy() && !isa<FunctionType>(OpTy)) ||
-                (OpTy->isVectorTy() && OpTy->getScalarType()->isPointerTy() &&
-                 !isa<FunctionType>(OpTy->getScalarType()))) {
-              continue;
-            }
-          }
-        }
-      }
       I.print(llvm::errs());
       llvm::errs() << "\n";
       report_fatal_error("Instruction contain opaque pointer need to be handled");

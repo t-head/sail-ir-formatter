@@ -1009,7 +1009,7 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
   case 'm': {
     if (Name.startswith("masked.load.")) {
       Type *Tys[] = { F->getReturnType(), F->arg_begin()->getType() };
-      if (F->getName() !=
+      if (F->arg_size() == 3 || F->getName() !=
           Intrinsic::getName(Intrinsic::masked_load, Tys, F->getParent())) {
         rename(F);
         NewFn = Intrinsic::getDeclaration(F->getParent(),
@@ -1021,7 +1021,7 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
     if (Name.startswith("masked.store.")) {
       auto Args = F->getFunctionType()->params();
       Type *Tys[] = { Args[0], Args[1] };
-      if (F->getName() !=
+      if (F->arg_size() == 3 || F->getName() !=
           Intrinsic::getName(Intrinsic::masked_store, Tys, F->getParent())) {
         rename(F);
         NewFn = Intrinsic::getDeclaration(F->getParent(),
@@ -1034,7 +1034,7 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
     // to the new overload which includes an address space
     if (Name.startswith("masked.gather.")) {
       Type *Tys[] = {F->getReturnType(), F->arg_begin()->getType()};
-      if (F->getName() !=
+      if (F->arg_size() == 3 || F->getName() !=
           Intrinsic::getName(Intrinsic::masked_gather, Tys, F->getParent())) {
         rename(F);
         NewFn = Intrinsic::getDeclaration(F->getParent(),
@@ -1045,7 +1045,7 @@ static bool UpgradeIntrinsicFunction1(Function *F, Function *&NewFn) {
     if (Name.startswith("masked.scatter.")) {
       auto Args = F->getFunctionType()->params();
       Type *Tys[] = {Args[0], Args[1]};
-      if (F->getName() !=
+      if (F->arg_size() == 3 || F->getName() !=
           Intrinsic::getName(Intrinsic::masked_scatter, Tys, F->getParent())) {
         rename(F);
         NewFn = Intrinsic::getDeclaration(F->getParent(),
@@ -4441,7 +4441,48 @@ void llvm::UpgradeIntrinsicCall(CallBase *CI, Function *NewFn) {
   case Intrinsic::masked_gather:
   case Intrinsic::masked_scatter: {
     SmallVector<Value *, 4> Args(CI->args());
-    NewCall = Builder.CreateCall(NewFn, Args);
+    unsigned PtrIdx = NewFn->getIntrinsicID() == Intrinsic::masked_load ||
+                      NewFn->getIntrinsicID() == Intrinsic::masked_gather ? 0 : 1;
+    unsigned AlignIdx = PtrIdx + 1;
+    SmallVector<AttributeSet, 4> ParamAttrs;
+    AttributeList OldAttrs = CI->getAttributes();
+    if (Args.size() == 3) {
+      // Upgrade before any pass can verify the old mask as an alignment operand.
+      MaybeAlign Alignment = CI->getParamAlign(PtrIdx);
+      if (!Alignment)
+        Alignment = F->getParamAlign(PtrIdx);
+      Args.insert(Args.begin() + AlignIdx,
+                  ConstantInt::get(Type::getInt32Ty(C),
+                                   Alignment ? Alignment->value() : 1));
+      for (unsigned I = 0; I < 4; ++I) {
+        AttributeSet Attributes = I == AlignIdx ? AttributeSet()
+            : OldAttrs.getParamAttrs(I - (I > AlignIdx));
+        if (I == AlignIdx + 1)
+          Attributes = Attributes.removeAttribute(C, Attribute::ImmArg);
+        ParamAttrs.push_back(Attributes);
+      }
+    } else {
+      for (unsigned I = 0; I < 4; ++I)
+        ParamAttrs.push_back(OldAttrs.getParamAttrs(I));
+    }
+    // Preserve bundles during signature upgrades for later pointer typing.
+    SmallVector<OperandBundleDef, 2> Bundles;
+    CI->getOperandBundlesAsDefs(Bundles);
+    FunctionType *CallTy = NewFn->getFunctionType();
+    if (CI->getFunctionType() != F->getFunctionType()) {
+      // Preserve malformed call types so the verifier can diagnose them.
+      SmallVector<Type *, 4> ParamTypes;
+      for (Value *Arg : Args)
+        ParamTypes.push_back(Arg->getType());
+      CallTy = FunctionType::get(CI->getType(), ParamTypes, false);
+    }
+    NewCall = Builder.CreateCall(CallTy, NewFn, Args, Bundles);
+    NewCall->setAttributes(AttributeList::get(C, OldAttrs.getFnAttrs(),
+                                             OldAttrs.getRetAttrs(), ParamAttrs));
+    NewCall->setCallingConv(CI->getCallingConv());
+    if (auto *Call = dyn_cast<CallInst>(CI))
+      NewCall->setTailCallKind(Call->getTailCallKind());
+    NewCall->copyIRFlags(CI);
     NewCall->copyMetadata(*CI);
     break;
   }
